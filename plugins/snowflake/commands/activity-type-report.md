@@ -35,13 +35,49 @@ Activity type categories:
 
 **IMPORTANT: Run all phases sequentially without pausing for user confirmation.** This command should execute end-to-end unattended. Do not ask the user to confirm before writing files, running scripts, or proceeding to the next phase. Only stop if an error occurs that requires user intervention (e.g., auth failure, missing MCP server).
 
-### Phase 1: Verify Snowflake Connection
+### Phase 1: Fetch Activity Type Definitions
+
+Fetch the canonical activity type definitions from the source document:
+https://docs.google.com/document/d/16Ooi8A_Qq-sK4epNT2rCpzjPeDk2_n0qEHOH2Cis-Zk/edit?tab=t.0#heading=h.vddiwe3esm44
+
+**CRITICAL**: If you cannot access this document, STOP immediately and tell the user:
+```
+Error: Unable to access activity type definitions document.
+The document may be private or you may not have access.
+
+Please either:
+1. Share the document publicly or with claude.ai
+2. Copy the definitions into a local file and update the command
+
+Cannot proceed without activity type definitions.
+```
+
+Extract all activity type categories and their descriptions from the document. Create a temporary file at `.work/snowflake/activity_type_definitions.json` in this format:
+
+```json
+{
+  "Associate Wellness & Development": "Description here...",
+  "Incidents & Support": "Description here...",
+  ...
+}
+```
+
+Create the parent directory if needed:
+```bash
+mkdir -p .work/snowflake
+```
+
+Verify that you extracted at least 6 categories. If fewer, abort with an error that the document may have changed format.
+
+This file will be passed to the classification script in Phase 5.
+
+### Phase 2: Verify Snowflake Connection
 
 Read and follow the `setup-snowflake` skill. This checks for the Snowflake MCP server, guides the user through setup if needed, and sets the session context (`PUBLIC` role, `JIRA_DB.CLOUDRHAI_MARTS` schema).
 
 If setup fails, abort with the guidance message from the skill. Do not proceed without a working Snowflake connection.
 
-### Phase 2: Discover Schema
+### Phase 3: Discover Schema
 
 Query the available views and columns to build adaptive SQL:
 
@@ -61,7 +97,7 @@ Use the results to determine which columns and join views are available. The sch
 
 **Important**: When joining to lookup views like `JIRA_ISSUETYPE_RHAI`, always check their column names first via `INFORMATION_SCHEMA.COLUMNS`. For example, `JIRA_ISSUETYPE_RHAI` uses `PNAME` (not `NAME`) for the type label.
 
-### Phase 3: Fetch Issues
+### Phase 4: Fetch Issues
 
 Build and execute a SQL query to fetch issues for the specified projects and time range. Use the Snowflake MCP `execute_sql` tool.
 
@@ -153,7 +189,7 @@ GROUP BY ji.ISSUE_KEY
 
 **Important**: Snowflake MCP may return results in pages. For large datasets, first run a `COUNT(*)` query to determine the total, then issue parallel `LIMIT 10000 OFFSET N` queries to fetch all pages. Proceed immediately to Phase 3.5 with the results — do not ask the user.
 
-### Phase 3.5: Assemble Data and Compute Output Directory
+### Phase 4.5: Assemble Data and Compute Output Directory
 
 Write a Python script inline (via Bash tool) that:
 1. Reads all the persisted Snowflake tool result JSON files from the current session
@@ -198,9 +234,9 @@ with open(f"{run_dir}/projects.txt", "w") as fh: fh.write(projects_str)
 
 All subsequent phases write to `$RUN_DIR/`.
 
-### Phase 4: Classify Issues
+### Phase 5: Classify Issues
 
-**Cache check**: If `$RUN_DIR/classified_issues.json` already exists (full mode) or `$RUN_DIR/estimates.json` already exists (sample mode), skip classification entirely and go directly to Phase 5. Tell the user: "Found existing classification in `$RUN_DIR/` — skipping Vertex AI API call to save tokens. Delete the directory to force re-classification."
+**Cache check**: If `$RUN_DIR/classified_issues.json` already exists (full mode) or `$RUN_DIR/estimates.json` already exists (sample mode), skip classification entirely and go directly to Phase 6. Tell the user: "Found existing classification in `$RUN_DIR/` — skipping Vertex AI API call to save tokens. Delete the directory to force re-classification."
 
 Otherwise, write the fetched issues to `$RUN_DIR/issues.json` as a JSON array. Each object should include: `ISSUEKEY`, `PROJECT_KEY`, `SUMMARY`, `DESCRIPTION_EXCERPT`, `CREATED`, `ISSUE_TYPE`, `STATUS`, `COMPONENTS` (if available), and `IS_BOT`.
 
@@ -214,7 +250,8 @@ SCRIPT_DIR=$(find ~/.claude/plugins -path '*/snowflake/scripts' -type d -print -
 ```bash
 python3 "$SCRIPT_DIR/classify_issues.py" \
   --input $RUN_DIR/issues.json \
-  --output $RUN_DIR/classified_issues.json
+  --output $RUN_DIR/classified_issues.json \
+  --definitions .work/snowflake/activity_type_definitions.json
 ```
 
 #### Sample mode (`--sample`)
@@ -234,7 +271,8 @@ python3 "$SCRIPT_DIR/sample_and_estimate.py" \
 ```bash
 python3 "$SCRIPT_DIR/classify_issues.py" \
   --input $RUN_DIR/sample_to_classify.json \
-  --output $RUN_DIR/classified_sample.json
+  --output $RUN_DIR/classified_sample.json \
+  --definitions .work/snowflake/activity_type_definitions.json
 ```
 
 **Step 3: Bayesian estimation**
@@ -253,7 +291,7 @@ Full mode processes issues in batches of 15. Sample mode classifies only the sam
 
 **Run all steps without asking for confirmation.** Set a generous timeout (600s) on the classify step since it makes sequential API calls. In sample mode, run Steps 1-3 sequentially in a single Bash invocation when all paths are known at invocation time.
 
-### Phase 5: Generate Report
+### Phase 6: Generate Report
 
 Locate the `generate_sankey.py` script in the same `scripts/` directory and run it:
 
@@ -292,7 +330,7 @@ python3 "$SCRIPT_DIR/generate_sankey.py" \
   --estimates $RUN_DIR/estimates.json
 ```
 
-### Phase 6: Present Results
+### Phase 7: Present Results
 
 **Always** display a text summary directly in the conversation. This is the most important output — leaders need the distribution at a glance without opening a file.
 

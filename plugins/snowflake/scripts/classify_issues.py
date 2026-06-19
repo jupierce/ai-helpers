@@ -235,6 +235,7 @@ def main():
     parser = argparse.ArgumentParser(description="Classify Jira issues using Claude via Vertex AI")
     parser.add_argument("--input", required=True, help="Input JSON file (array of issues)")
     parser.add_argument("--output", required=True, help="Output JSON file (issues with activity_type)")
+    parser.add_argument("--definitions", required=False, help="JSON file with activity type definitions (overrides hardcoded defaults)")
     parser.add_argument("--batch-size", type=int, default=15, help="Issues per API call (default: 15)")
     parser.add_argument("--model", default=None, help="Claude model ID (default: from env or claude-sonnet-4-6)")
     args = parser.parse_args()
@@ -255,6 +256,14 @@ def main():
         f"https://{host}/v1/projects/{project_id}"
         f"/locations/{region}/publishers/anthropic/models/{model}:rawPredict"
     )
+
+    # Load activity type definitions (from file if provided, else use hardcoded defaults)
+    global ACTIVITY_TYPE_DEFINITIONS, VALID_CATEGORIES
+    if args.definitions:
+        with open(args.definitions) as f:
+            ACTIVITY_TYPE_DEFINITIONS = json.load(f)
+            VALID_CATEGORIES = set(ACTIVITY_TYPE_DEFINITIONS.keys())
+            print(f"Loaded {len(ACTIVITY_TYPE_DEFINITIONS)} activity type definitions from {args.definitions}")
 
     # Load issues
     with open(args.input) as f:
